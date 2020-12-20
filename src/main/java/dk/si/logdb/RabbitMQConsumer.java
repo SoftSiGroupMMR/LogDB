@@ -1,9 +1,7 @@
 package dk.si.logdb;
 
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.google.gson.Gson;
 import com.mongodb.MongoClient;
 import com.mongodb.MongoClientURI;
 import com.mongodb.client.MongoCollection;
@@ -13,14 +11,17 @@ import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.DeliverCallback;
 import org.bson.Document;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.env.Environment;
 
 import java.io.IOException;
-import java.util.Map;
 import java.util.concurrent.TimeoutException;
 
 public class RabbitMQConsumer {
-    private ObjectMapper objectMapper = new ObjectMapper();
-    private static int count = 0;
+
+    @Autowired
+    private static Environment env;
+
     public static void main(String[] args) throws IOException, TimeoutException {
 
         rabbitConsumer();
@@ -28,12 +29,11 @@ public class RabbitMQConsumer {
     }
 
     public static void rabbitConsumer() throws IOException, TimeoutException {
-        MongoClientURI uri = new MongoClientURI(
-                "mongodb+srv://mmmrj1:mmmrj1@cluster0.anvpi.mongodb.net/LogsSI?retryWrites=true&w=majority");
+        MongoClientURI uri = new MongoClientURI(env.getProperty("spring.data.mongodb.uri"));
 
         MongoClient mongoClient = new MongoClient(uri);
         MongoDatabase database = mongoClient.getDatabase("LogsSI");
-
+        MongoCollection collection = database.getCollection("Logs");
 
         ConnectionFactory factory = new ConnectionFactory();
 
@@ -49,25 +49,26 @@ public class RabbitMQConsumer {
         DeliverCallback deliverCallback = (consumerTag, delivery) ->
         {
             String message = new String(delivery.getBody(), "UTF-8");
-            mongoDBProducer(message, database);
+            mongoDBProducer(message, collection);
         };
         channel.basicConsume("q_logstash", true, deliverCallback, consumerTag -> {
         });
 
     }
 
-    private static void mongoDBProducer(String log, MongoDatabase database) throws JsonProcessingException {
-        MongoCollection collection = database.getCollection("Logs");
-        Map<String, Object> map = new ObjectMapper().readValue(log.replaceAll("\"",""), new TypeReference<Map<String, Object>>() {
-        });
-        System.out.println("IN"+count);
-        Document document = new Document();
-        for (Map.Entry<String, Object> entry : map.entrySet()) {
-            document.append(entry.getKey(), entry.getValue());
+    private static void mongoDBProducer(String log, MongoCollection collection) {
+        try {
+            log.trim();
+            Log logger = new Gson().fromJson(log, Log.class);
+            Document document = new Document();
+            document.append("klass", logger.getKlass());
+            document.append("level", logger.getLevel());
+            document.append("message", logger.getMessage());
+            document.append("thread", logger.getThread());
+            document.append("time", logger.getTime());
+            collection.insertOne(document);
+        } catch (Exception e) {
+            System.out.println("Ilegal mapping, the message contains ilegal charset");
         }
-        System.out.println("OUT"+count);
-        collection.insertOne(document);
-        System.out.println("SEND"+count);
-        count++;
     }
 }
